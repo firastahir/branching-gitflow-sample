@@ -1,0 +1,135 @@
+def mvn(String goals) {
+  configFileProvider([configFile(fileId: '829ca6d6-a6e9-45cd-9a9a-bb3250c79577', variable: 'MAVEN_SETTINGS')]) {
+    sh "'/home/jenkins/tools/hudson.tasks.Maven_MavenInstallation/maven-3.5.4/bin/mvn' -s $MAVEN_SETTINGS ${goals}"
+  }
+}
+
+
+node {
+
+def mvnHome = tool 'maven-3.5.4'
+  properties([
+    [$class: 'BuildDiscarderProperty',
+      strategy: [$class: 'LogRotator',
+        artifactDaysToKeepStr: '5',
+        artifactNumToKeepStr: '5',
+        daysToKeepStr: '10',
+        numToKeepStr: '5']
+    ],
+
+  ])
+  // Define the payload to send to GitHub.
+  // This is JSON
+  def githubPayload = """{
+      "required_status_checks": {
+        "strict": true,
+        "contexts": [
+          "continuous-integration/jenkins/branch"
+        ]
+      },
+      "enforce_admins": true,
+      "required_pull_request_reviews": {
+        "dismissal_restrictions": {
+         "users": [
+          ""
+          ],
+         "teams": [
+           ""
+         ]
+        },
+        "dismiss_stale_reviews": true,
+        "require_code_owner_reviews": true
+      },
+      "restrictions": {
+       "users": [
+         ""
+       ],
+       "teams": [
+         ""
+       ]
+      }
+    }"""
+
+      tokens = "${env.JOB_NAME}".tokenize('/')
+      repo = tokens[tokens.size()-2]  
+      branch = tokens[tokens.size()-1]
+      sh "echo '${repo}'"
+      sh "echo '${branch}'"
+      def scmUrl = scm.getUserRemoteConfigs()[0].getUrl()
+  stage("Protect Master Branch") {
+      checkout scm
+      
+    if("${branch}" == "master") {
+        // The credentialsId should match yours, not this demonstration
+        withCredentials([string(credentialsId: '86cd5211-030e-493a-992c-93de58c32e90', variable: 'username')]) {
+          httpRequest(
+              contentType: 'APPLICATION_JSON',
+              consoleLogResponseBody: true,
+              customHeaders: [
+                  [maskValue: true, name: 'Authorization', value: "token ${username}"],
+                  [name: 'Accept', value: 'application/vnd.github.loki-preview']],
+              httpMode: 'PUT',
+              ignoreSslErrors: true,
+              requestBody: githubPayload,
+              responseHandle: 'NONE',
+              url: "https://github.ameren.com/api/v3/repos/Ameren/${repo}/branches/${branch}/protection")
+        }
+    } else {
+        sh(name: "Skip", script: 'echo "Move along, nothing to see here"')
+    }
+  }
+
+   if(env.BRANCH_NAME == 'master'){
+      stage('Checkout') {
+      checkout scm
+   }
+      stage('Build') {
+      mvn "clean package"
+      }
+   
+   stage('Install') {
+       mvn "install"
+   }
+	 stage("Upload"){
+		// Artifact repository upload steps here
+		echo 'Uploaded snapshot to artifactory'
+	 }
+	 stage("Deploy"){
+		// Deploy steps here
+		echo 'Deployed snapshot to DEV'
+	 }
+	 stage("Smoke Test"){
+		echo 'Deployed snapshot to DEV'
+	 }
+	}   
+	if(env.BRANCH_NAME ==~ /release.*/){
+	 stage("Deploy"){
+		echo 'Deployed release to DEV'
+	 }
+	 stage("Dev Approval"){
+		echo 'Waiting on Approval'
+	 }
+	 stage("Release"){
+		echo 'Uploaded release version to artifactory and git commit'
+	 }
+	 stage("Promoting build to QA"){
+		echo 'Releasing release version to QA artifactory'
+	 }
+	 stage("Approval QA Deploy"){
+		echo 'Release build from QA artifactory to QA'
+	 }
+	}
+	if(env.BRANCH_NAME != 'master' || env.BRANCH_NAME !=~ /release.*/){
+      stage('Checkout') {
+      checkout scm
+   }
+      stage('Build') {
+      mvn "clean package"
+      }
+   
+   stage('Install') {
+       mvn "install"
+   }
+   }
+
+}
